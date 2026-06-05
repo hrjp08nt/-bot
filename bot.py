@@ -5,6 +5,20 @@ import os
 import re
 import random
 from datetime import date
+from flask import Flask
+from threading import Thread
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "ColdLaugh Bot Running"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+Thread(target=run_web).start()
 
 
 TOKEN = os.getenv("TOKEN")
