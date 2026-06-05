@@ -233,14 +233,8 @@ async def 冷笑度(ctx, member: discord.Member = None):
 async def かどアイス(ctx):
 
     await ctx.send(
-        f"🍨 かどくんアイス被害状況\n\n"
-        f"累計アイス禁止期間: {data['ice_ban_days']}日\n"
-        f"原因: サーバー内の冷笑行為"
-メモリ: {data['ice_ban_days']}日
-
-保存先:
-{os.path.abspath(DATA_FILE)}
-"""
+        f"メモリ値: {data['ice_ban_days']}日\n"
+        f"保存先: {os.path.abspath(DATA_FILE)}"
     )
 
 # 管理者用リセット
