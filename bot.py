@@ -273,3 +273,10 @@ async def 蘇生(ctx, days: int = 1):
         f"🍨 アイス禁止期間 -{actual}日\n"
         f"現在のアイス禁止期間: {data['ice_ban_days']}日"
     )
+    print("BOT STARTING...")
+
+try:
+    bot.run(TOKEN)
+except Exception as e:
+    print("ERROR:", repr(e))
+    raise
