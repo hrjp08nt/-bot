@@ -1,37 +1,36 @@
 import discord
 from discord.ext import commands
-import json
 import os
 import re
 import random
 from datetime import date
-from flask import Flask
-from threading import Thread
+from supabase import create_client
 
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "ColdLaugh Bot Running"
-
-def run_web():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
-
-Thread(target=run_web).start()
-
-
+# =====================
+# 環境変数
+# =====================
 TOKEN = os.getenv("TOKEN")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
 RECOVERY_CHANNEL_ID = 1511925134129107045
 
+# =====================
+# Supabase
+# =====================
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# =====================
+# Discord
+# =====================
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-DATA_FILE = "coldlaugh_data.json"
-
-# 冷笑ワードとポイント
+# =====================
+# 冷笑ワード（そのまま）
+# =====================
 COLD_LAUGH_WORDS = {
     "うお": 1,
     "かっけー": 1,
@@ -45,59 +44,57 @@ COLD_LAUGH_WORDS = {
     "おもろ": 2,
 }
 
+# =====================
+# Supabase関数
+# =====================
 
-# データ読み込み
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {
-    "scores": {},
-    "ice_ban_days": 0,
-    "last_update": str(date.today())
-}
+def load_ice():
+    res = supabase.table("ice_state").select("*").eq("id", 1).execute()
+    return res.data[0]
 
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+def save_ice(days, last_update):
+    supabase.table("ice_state").update({
+        "ice_ban_days": days,
+        "last_update": last_update
+    }).eq("id", 1).execute()
 
-# データ保存
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+def add_score(user_id, name, points):
+    res = supabase.table("scores").select("*").eq("user_id", user_id).execute()
 
-data = load_data()
+    if res.data:
+        user = res.data[0]
+        supabase.table("scores").update({
+            "score": user["score"] + points,
+            "name": name
+        }).eq("user_id", user_id).execute()
+    else:
+        supabase.table("scores").insert({
+            "user_id": user_id,
+            "name": name,
+            "score": points
+        }).execute()
 
-# Ensure required keys exist
-if "scores" not in data:
-    data["scores"] = {}
-if "ice_ban_days" not in data:
-    data["ice_ban_days"] = 0
-if "last_update" not in data:
-    data["last_update"] = str(date.today())
-
+# =====================
+# 起動処理（そのままロジック維持）
+# =====================
 @bot.event
 async def on_ready():
 
+    ice = load_ice()
+
     today = date.today()
-
-    last_update = date.fromisoformat(
-        data.get("last_update", str(today))
-    )
-
+    last_update = date.fromisoformat(ice["last_update"])
     days_passed = (today - last_update).days
 
     if days_passed > 0:
 
-        before = data["ice_ban_days"]
+        before = ice["ice_ban_days"]
 
-        data["ice_ban_days"] = max(
-            0,
-            data["ice_ban_days"] - days_passed
-        )
+        ice["ice_ban_days"] = max(0, ice["ice_ban_days"] - days_passed)
 
-        data["last_update"] = str(today)
+        save_ice(ice["ice_ban_days"], str(today))
 
-        save_data(data)
-
-        recovered = before - data["ice_ban_days"]
+        recovered = before - ice["ice_ban_days"]
 
         if recovered > 0:
 
@@ -120,13 +117,17 @@ async def on_ready():
                 await channel.send(
                     f"🍨 かどくんの{random.choice(recovery_messages)}！\n\n"
                     f"🍨 アイス禁止期間 -{recovered}日\n"
-                    f"現在のアイス禁止期間: "
-                    f"{data['ice_ban_days']}日"
+                    f"現在のアイス禁止期間: {ice['ice_ban_days']}日"
                 )
 
     print(f"ログイン完了: {bot.user}")
+
+# =====================
+# 冷笑検知（完全そのまま演出）
+# =====================
 @bot.event
 async def on_message(message):
+
     if message.author.bot:
         return
 
@@ -140,18 +141,11 @@ async def on_message(message):
 
             user_id = str(message.author.id)
 
-            if user_id not in data["scores"]:
-                data["scores"][user_id] = {
-                    "name": message.author.display_name,
-                    "score": 0
-                }
+            add_score(user_id, message.author.display_name, points)
 
-            data["scores"][user_id]["name"] = message.author.display_name
-            data["scores"][user_id]["score"] += points
-
-            data["ice_ban_days"] += points
-
-            save_data(data)
+            ice = load_ice()
+            ice["ice_ban_days"] += points
+            save_ice(ice["ice_ban_days"], ice["last_update"])
 
             stars = min(points, 5)
             cold_level = "★" * stars + "☆" * (5 - stars)
@@ -165,11 +159,10 @@ async def on_message(message):
                 f"💀 冷笑ポイント +{points}\n"
                 f"🍨 かどくんのアイス禁止期間 +{points}日\n\n"
                 f"現在、かどくんは累計 "
-                f"{data['ice_ban_days']} 日アイスを食べられません。"
+                f"{ice['ice_ban_days']} 日アイスを食べられません。"
             )
 
-            # 特殊イベント
-            total = data["ice_ban_days"]
+            total = ice["ice_ban_days"]
 
             if total >= 1000:
                 msg += "\n\n🌍 冷笑災害認定"
@@ -181,22 +174,20 @@ async def on_message(message):
                 msg += "\n\n📢 かどくんは1か月アイスを失いました"
 
             await message.channel.send(msg)
-
             break
 
     await bot.process_commands(message)
 
-# ランキング
+# =====================
+# コマンド（そのまま）
+# =====================
+
 @bot.command()
 async def 冷笑ランキング(ctx):
 
-    ranking = sorted(
-        data["scores"].values(),
-        key=lambda x: x["score"],
-        reverse=True
-    )
+    res = supabase.table("scores").select("*").order("score", desc=True).limit(10).execute()
 
-    if not ranking:
+    if not res.data:
         await ctx.send("まだ冷笑は観測されていません。")
         return
 
@@ -204,92 +195,76 @@ async def 冷笑ランキング(ctx):
 
     medals = ["🥇", "🥈", "🥉"]
 
-    for i, user in enumerate(ranking[:10]):
+    for i, user in enumerate(res.data):
         medal = medals[i] if i < 3 else f"{i+1}."
         text += f"{medal} {user['name']} - {user['score']}pt\n"
 
     await ctx.send(text)
 
-# 個人ポイント
+
 @bot.command()
 async def 冷笑度(ctx, member: discord.Member = None):
 
     if member is None:
         member = ctx.author
 
-    uid = str(member.id)
+    res = supabase.table("scores").select("*").eq("user_id", str(member.id)).execute()
 
-    score = data["scores"].get(
-        uid,
-        {"score": 0}
-    )["score"]
+    score = res.data[0]["score"] if res.data else 0
 
     await ctx.send(
         f"💀 {member.display_name} の累計冷笑ポイント: {score}pt"
     )
 
-# アイス状況
+
 @bot.command()
 async def かどアイス(ctx):
 
+    ice = load_ice()
+
     await ctx.send(
-        f"メモリ値: {data['ice_ban_days']}日\n"
-        f"保存先: {os.path.abspath(DATA_FILE)}"
+        f"🍨 かどくんアイス被害状況\n\n"
+        f"累計アイス禁止期間: {ice['ice_ban_days']}日\n"
+        f"原因: サーバー内の冷笑行為"
     )
 
-# 管理者用リセット
+
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def 復活(ctx):
 
-    data["ice_ban_days"] = 0
-    save_data(data)
+    save_ice(0, str(date.today()))
+    await ctx.send("✨ かどくんのアイスが復活しました！")
 
-    await ctx.send(
-        "✨ かどくんのアイスが復活しました！"
-    )
 
-#管理者用蘇生
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def 蘇生(ctx, days: int = 1):
+
+    ice = load_ice()
 
     if days <= 0:
         await ctx.send("🍨 1日以上指定してください。")
         return
 
-    if data["ice_ban_days"] <= 0:
-        await ctx.send(
-            "🍨 かどくんはすでに自由にアイスを食べられます。"
-        )
-        return
+    actual = min(days, ice["ice_ban_days"])
 
-    actual = min(days, data["ice_ban_days"])
+    ice["ice_ban_days"] -= actual
 
-    data["ice_ban_days"] -= actual
-    save_data(data)
+    save_ice(ice["ice_ban_days"], ice["last_update"])
 
     ices = [
-        "ガリガリ君",
-        "アイスの実",
-        "スーパーカップ",
-        "パピコ",
-        "ピノ",
-        "爽",
-        "MOW",
-        "雪見だいふく",
-        "あずきバー"
+        "ガリガリ君","アイスの実","スーパーカップ",
+        "パピコ","ピノ","爽","MOW","雪見だいふく","あずきバー"
     ]
 
     await ctx.send(
         f"🍨 かどくんの{random.choice(ices)}が支給されました！\n"
         f"🍨 アイス禁止期間 -{actual}日\n"
-        f"現在のアイス禁止期間: {data['ice_ban_days']}日"
+        f"現在のアイス禁止期間: {ice['ice_ban_days']}日"
     )
-    print("BOT STARTING...")
 
-try:
-    bot.run(TOKEN)
-except Exception as e:
-    print("ERROR:", repr(e))
-    raise
+# =====================
+# 起動
+# =====================
+bot.run(TOKEN)
